@@ -1,0 +1,43 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String        @id @default(uuid())
+  username     String        @unique
+  password     String
+  name         String?
+  role         String        @default("SETTER") // ADMIN, SETTER
+  createdAt    DateTime      @default(now())
+  outreaches   Outreach[]
+  activityLogs ActivityLog[]
+}
+
+model Outreach {
+  id        String        @id @default(uuid())
+  name      String?
+  instagram String?
+  contact   String? 
+  type      String        @default("NUEVO") // NUEVO, CONTACTADO, AVANZADO, SEGUIMIENTO, CERRADO, PERDIDO
+  userId    String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  logs      ActivityLog[]
+}
+
+model ActivityLog {
+  id           String    @id @default(uuid())
+  type         String    // MENSAJE_ENVIADO, STATUS_CHANGE
+  content      String?
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  outreachId   String?
+  outreach     Outreach? @relation(fields: [outreachId], references: [id], onDelete: Cascade)
+  createdAt    DateTime  @default(now())
+}
