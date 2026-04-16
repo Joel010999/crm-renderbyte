@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 
+// Directorio de backups
 const backupsDir = path.join(__dirname, 'backups');
 if (!fs.existsSync(backupsDir)) {
     fs.mkdirSync(backupsDir);
@@ -19,12 +20,18 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 
+// --- Middlewares Globales ---
 app.use(cors());
 app.use(express.json());
 
+// Ruta de bienvenida para testear el deploy
+app.get('/', (req, res) => {
+    res.send('🚀 Renderbyte API - Operativa y volando en Railway');
+});
+
 const getArgentinaNow = () => DateTime.now().setZone('America/Argentina/Cordoba');
 
-// --- Middleware ---
+// --- Middlewares de Seguridad ---
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -67,11 +74,11 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
-app.get('/api/me', authenticateToken, (req, res) => {
+app.get('/api/auth/me', authenticateToken, (req, res) => {
     res.json(req.user);
 });
 
-// --- Admin: Setter Management ---
+// --- Admin: Gestión de Setters ---
 app.post('/api/admin/setters', authenticateToken, isAdmin, async (req, res) => {
     const { username, password, real_name } = req.body;
     const now = getArgentinaNow().toISO();
@@ -84,7 +91,7 @@ app.post('/api/admin/setters', authenticateToken, isAdmin, async (req, res) => {
         `, [username, passwordHash, real_name, now, now]);
         res.status(201).json({ message: 'Setter created successfully' });
     } catch (error) {
-        if (error.code === '23505') { // Postgres code for UNIQUE constraint
+        if (error.code === '23505') {
             return res.status(400).json({ error: 'Username already exists' });
         }
         res.status(500).json({ error: error.message });
@@ -172,7 +179,6 @@ app.post('/api/setter/messages/:id/update', authenticateToken, async (req, res) 
         const message = msgRes.rows[0];
         if (!message) return res.status(404).json({ error: 'Message not found' });
 
-        // Postgres Transaction manual
         await db.query('BEGIN');
         await db.query('UPDATE messages SET message_type = $1, updated_at = $2 WHERE id = $3', [new_status, now, req.params.id]);
         await db.query(`
