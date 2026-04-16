@@ -10,7 +10,6 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 
-// Directorio de backups
 const backupsDir = path.join(__dirname, 'backups');
 if (!fs.existsSync(backupsDir)) {
     fs.mkdirSync(backupsDir);
@@ -20,18 +19,16 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 
-// --- CONFIGURACIÓN DE CORS ---
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
+// --- CONFIGURACIÓN DE RUTAS DE CARPETAS ---
+// Esto detecta si estamos en Railway o en tu compu y busca la carpeta dist
+const frontendPath = path.resolve(__dirname, '..', 'client', 'dist');
+console.log("🔍 Buscando frontend en:", frontendPath);
 
+app.use(cors());
 app.use(express.json());
 
-// --- SERVIR ARCHIVOS ESTÁTICOS DEL FRONTEND ---
-// Esto hace que Railway entienda que la web está en la carpeta client/dist
-app.use(express.static(path.join(__dirname, '../client/dist')));
+// Servir archivos estáticos (CSS, JS, Imágenes)
+app.use(express.static(frontendPath));
 
 const getArgentinaNow = () => DateTime.now().setZone('America/Argentina/Cordoba');
 
@@ -86,13 +83,9 @@ app.get('/api/auth/me', authenticateToken, (req, res) => {
 app.post('/api/admin/setters', authenticateToken, isAdmin, async (req, res) => {
     const { username, password, real_name } = req.body;
     const now = getArgentinaNow().toISO();
-
     try {
         const passwordHash = bcrypt.hashSync(password, 10);
-        await db.query(`
-            INSERT INTO users (username, password_hash, real_name, role, created_at, updated_at)
-            VALUES ($1, $2, $3, 'setter', $4, $5)
-        `, [username, passwordHash, real_name, now, now]);
+        await db.query(`INSERT INTO users (username, password_hash, real_name, role, created_at, updated_at) VALUES ($1, $2, $3, 'setter', $4, $5)`, [username, passwordHash, real_name, now, now]);
         res.status(201).json({ message: 'Setter created successfully' });
     } catch (error) {
         if (error.code === '23505') return res.status(400).json({ error: 'Username already exists' });
@@ -104,21 +97,13 @@ app.get('/api/admin/setters', authenticateToken, isAdmin, async (req, res) => {
     try {
         const result = await db.query(`SELECT id, username, real_name, is_active, created_at FROM users WHERE role = 'setter' AND is_active = 1`);
         const setters = result.rows;
-
         const now = getArgentinaNow();
         const todayStart = now.startOf('day').toISO();
         const weekStart = now.startOf('week').toISO();
         const monthStart = now.startOf('month').toISO();
-
         const enrichedSetters = [];
         for (const s of setters) {
-            const statsRes = await db.query(`
-                SELECT 
-                    COUNT(CASE WHEN created_at >= $1 THEN 1 END) as today,
-                    COUNT(CASE WHEN created_at >= $2 THEN 1 END) as week,
-                    COUNT(CASE WHEN created_at >= $3 THEN 1 END) as month
-                FROM messages WHERE setter_id = $4
-            `, [todayStart, weekStart, monthStart, s.id]);
+            const statsRes = await db.query(`SELECT COUNT(CASE WHEN created_at >= $1 THEN 1 END) as today, COUNT(CASE WHEN created_at >= $2 THEN 1 END) as week, COUNT(CASE WHEN created_at >= $3 THEN 1 END) as month FROM messages WHERE setter_id = $4`, [todayStart, weekStart, monthStart, s.id]);
             enrichedSetters.push({ ...s, ...statsRes.rows[0] });
         }
         res.json(enrichedSetters);
@@ -131,12 +116,8 @@ app.get('/api/admin/setters', authenticateToken, isAdmin, async (req, res) => {
 app.post('/api/setter/messages', authenticateToken, async (req, res) => {
     const { message_type, contact_type, contact_value, prospect_user } = req.body;
     const now = getArgentinaNow().toISO();
-
     try {
-        await db.query(`
-            INSERT INTO messages (setter_id, created_at, message_type, contact_type, contact_value, prospect_user, is_pro)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-        `, [req.user.id, now, message_type, contact_type, contact_value, prospect_user || '', 0]);
+        await db.query(`INSERT INTO messages (setter_id, created_at, message_type, contact_type, contact_value, prospect_user, is_pro) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [req.user.id, now, message_type, contact_type, contact_value, prospect_user || '', 0]);
         res.status(201).json({ message: 'Message logged' });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -148,72 +129,22 @@ app.get('/api/setter/metrics', authenticateToken, async (req, res) => {
     const todayStart = now.startOf('day').toISO();
     const weekStart = now.startOf('week').toISO();
     const monthStart = now.startOf('month').toISO();
-
     try {
-        const stats = await db.query(`
-            SELECT 
-                COUNT(CASE WHEN created_at >= $1 THEN 1 END) as today,
-                COUNT(CASE WHEN created_at >= $2 THEN 1 END) as week,
-                COUNT(CASE WHEN created_at >= $3 THEN 1 END) as month,
-                COUNT(*) as total
-            FROM messages WHERE setter_id = $4
-        `, [todayStart, weekStart, monthStart, req.user.id]);
+        const stats = await db.query(`SELECT COUNT(CASE WHEN created_at >= $1 THEN 1 END) as today, COUNT(CASE WHEN created_at >= $2 THEN 1 END) as week, COUNT(CASE WHEN created_at >= $3 THEN 1 END) as month, COUNT(*) as total FROM messages WHERE setter_id = $4`, [todayStart, weekStart, monthStart, req.user.id]);
         res.json(stats.rows[0]);
     } catch (err) {
         res.status(500).json({ error: 'Failed to fetch metrics' });
     }
 });
 
-app.post('/api/setter/messages/:id/update', authenticateToken, async (req, res) => {
-    const { new_status, note } = req.body;
-    const now = getArgentinaNow().toISO();
-
-    try {
-        const msgRes = await db.query('SELECT * FROM messages WHERE id = $1', [req.params.id]);
-        const message = msgRes.rows[0];
-        if (!message) return res.status(404).json({ error: 'Message not found' });
-
-        await db.query('BEGIN');
-        await db.query('UPDATE messages SET message_type = $1, updated_at = $2 WHERE id = $3', [new_status, now, req.params.id]);
-        await db.query(`
-            INSERT INTO message_history (message_id, user_id, old_status, new_status, note, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
-        `, [req.params.id, req.user.id, message.message_type, new_status, note || '', now]);
-        await db.query('COMMIT');
-        res.json({ message: 'Status updated successfully' });
-    } catch (err) {
-        await db.query('ROLLBACK');
-        res.status(500).json({ error: 'Failed to update status' });
-    }
-});
-
-// --- Leaderboard ---
-app.get('/api/leaderboard', authenticateToken, async (req, res) => {
-    const { period } = req.query;
-    const now = getArgentinaNow();
-    let start;
-    if (period === 'today') start = now.startOf('day');
-    else if (period === 'week') start = now.startOf('week');
-    else if (period === 'month') start = now.startOf('month');
-    else return res.status(400).json({ error: 'Invalid period' });
-
-    try {
-        const result = await db.query(`
-            SELECT u.real_name, COUNT(m.id) as count
-            FROM users u
-            LEFT JOIN messages m ON u.id = m.setter_id AND m.created_at >= $1
-            WHERE u.role = 'setter' AND u.is_active = 1
-            GROUP BY u.id, u.real_name ORDER BY count DESC LIMIT 3
-        `, [start.toISO()]);
-        res.json(result.rows);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// --- ESTA ES LA MAGIA: SIRVE EL FRONTEND PARA RUTAS NO-API ---
+// --- RUTA FINAL PARA LA WEB ---
 app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../client/dist', 'index.html'));
+    const indexPath = path.join(frontendPath, 'index.html');
+    if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+    } else {
+        res.status(404).send(`Error: No se encontró el index.html en ${frontendPath}. Revisá el build.`);
+    }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
