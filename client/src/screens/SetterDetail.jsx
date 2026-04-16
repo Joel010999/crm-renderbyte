@@ -7,7 +7,7 @@ import {
     Search, Instagram, MessageSquare, Clock, Star, X, History
 } from 'lucide-react';
 
-const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:5000/api`;
+const API_URL = import.meta.env.VITE_API_URL || 'https://crm.renderbyte.net/api';
 
 const SetterDetail = () => {
     const { id } = useParams();

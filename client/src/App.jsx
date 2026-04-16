@@ -13,7 +13,7 @@ const AuthContext = createContext();
 
 export const useAuth = () => useContext(AuthContext);
 
-const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:5000/api`;
+const API_URL = import.meta.env.VITE_API_URL || 'https://crm.renderbyte.net/api';
 
 // Axios Interceptor for tokens
 axios.interceptors.request.use(config => {
@@ -40,7 +40,7 @@ const AppContent = () => {
 
     const fetchUser = async () => {
         try {
-            const { data } = await axios.get(`${API_URL}/me`);
+            const { data } = await axios.get(`${API_URL}/auth/me`);
             setUser(data);
         } catch (err) {
             logout();

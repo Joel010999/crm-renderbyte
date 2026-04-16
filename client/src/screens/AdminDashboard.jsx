@@ -9,7 +9,7 @@ import {
     X, Instagram, MessageSquare, Clock, Cpu, Calendar, Star, User
 } from 'lucide-react';
 
-const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:5000/api`;
+const API_URL = import.meta.env.VITE_API_URL || 'https://crm.renderbyte.net/api';
 
 const AdminDashboard = () => {
     const { logout, user } = useAuth();
