@@ -20,8 +20,14 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 
-// --- Middlewares Globales ---
-app.use(cors());
+// --- CONFIGURACIÓN DE CORS REFORZADA ---
+// Esto permite que cualquier frontend se conecte sin bloqueos
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
 // Ruta de bienvenida para testear el deploy
@@ -110,7 +116,7 @@ app.get('/api/admin/setters', authenticateToken, isAdmin, async (req, res) => {
         const now = getArgentinaNow();
         const todayStart = now.startOf('day').toISO();
         const weekStart = now.startOf('week').toISO();
-        const monthStart = now.startOf('month').toISO();
+        const monthStart = now.now().startOf('month').toISO();
 
         const enrichedSetters = [];
         for (const s of setters) {
