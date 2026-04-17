@@ -20,14 +20,13 @@ const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 
 // --- CONFIGURACIÓN DE RUTAS DE CARPETAS ---
-// Esto detecta si estamos en Railway o en tu compu y busca la carpeta dist
-const frontendPath = path.resolve(__dirname, '..', 'client', 'dist');
-console.log("🔍 Buscando frontend en:", frontendPath);
+// Usamos path.join con process.cwd() que es la raíz del proyecto en Railway
+const frontendPath = path.join(process.cwd(), 'client', 'dist');
 
 app.use(cors());
 app.use(express.json());
 
-// Servir archivos estáticos (CSS, JS, Imágenes)
+// Servir archivos estáticos del frontend
 app.use(express.static(frontendPath));
 
 const getArgentinaNow = () => DateTime.now().setZone('America/Argentina/Cordoba');
@@ -138,15 +137,17 @@ app.get('/api/setter/metrics', authenticateToken, async (req, res) => {
 });
 
 // --- RUTA FINAL PARA LA WEB ---
+// Si no es una ruta de API, sirve el index.html
 app.get('*', (req, res) => {
     const indexPath = path.join(frontendPath, 'index.html');
     if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);
     } else {
-        res.status(404).send(`Error: No se encontró el index.html en ${frontendPath}. Revisá el build.`);
+        res.status(404).send(`Error: No se encontró el index.html en ${frontendPath}. Carpetas detectadas: ${fs.readdirSync(process.cwd()).join(', ')}`);
     }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📂 Frontend Path: ${frontendPath}`);
 });
