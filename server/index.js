@@ -53,10 +53,10 @@ const isAdmin = (req, res, next) => {
 // --- FUNCIÓN DE AUTO-CREACIÓN DE ADMIN (Postgres) ---
 const seedAdmin = async () => {
     const adminUsername = 'joel_admin';
-    const adminPassword = 'admin73152'; // CAMBIÁ ESTO por la clave que quieras
+    const adminPassword = 'admin73152'; // Tu clave configurada
 
     try {
-        // Borramos el usuario para asegurar que la clave se actualice si la cambiaste en el código
+        // Borramos el usuario para asegurar que el ID y la clave se reseteen correctamente
         await db.query('DELETE FROM users WHERE username = $1', [adminUsername]);
 
         const hash = bcrypt.hashSync(adminPassword, 10);
@@ -67,7 +67,7 @@ const seedAdmin = async () => {
             VALUES ($1, $2, $3, $4, $5, $6, $7)
         `, [adminUsername, hash, 'Joel', 'admin', 1, now, now]);
 
-        console.log('✅ ADMIN RESETEADO: Usuario "joel_admin" creado con éxito en Postgres.');
+        console.log('✅ ADMIN RESETEADO: Acceso garantizado para "joel_admin".');
     } catch (error) {
         console.error('❌ Error en el seed de Postgres:', error.message);
     }
@@ -100,7 +100,29 @@ app.get('/api/auth/me', authenticateToken, (req, res) => {
     res.json(req.user);
 });
 
-// --- Admin: Gestión de Setters ---
+// --- Admin: Gestión de Setters (REFORZADA) ---
+app.get('/api/admin/setters', authenticateToken, isAdmin, async (req, res) => {
+    try {
+        // Traemos todos los usuarios activos para evitar que el .find() del front falle
+        const result = await db.query(`SELECT id, username, real_name, role, is_active, created_at FROM users WHERE is_active = 1`);
+        const users = result.rows;
+        const now = getArgentinaNow();
+        const todayStart = now.startOf('day').toISO();
+        const weekStart = now.startOf('week').toISO();
+        const monthStart = now.startOf('month').toISO();
+        const enrichedUsers = [];
+
+        for (const u of users) {
+            const statsRes = await db.query(`SELECT COUNT(CASE WHEN created_at >= $1 THEN 1 END) as today, COUNT(CASE WHEN created_at >= $2 THEN 1 END) as week, COUNT(CASE WHEN created_at >= $3 THEN 1 END) as month FROM messages WHERE setter_id = $4`, [todayStart, weekStart, monthStart, u.id]);
+            enrichedUsers.push({ ...u, ...statsRes.rows[0] });
+        }
+        res.json(enrichedUsers);
+    } catch (err) {
+        console.error("Error en setters:", err.message);
+        res.json([]); // Enviamos array vacío para que el front no crashee
+    }
+});
+
 app.post('/api/admin/setters', authenticateToken, isAdmin, async (req, res) => {
     const { username, password, real_name } = req.body;
     const now = getArgentinaNow().toISO();
@@ -111,25 +133,6 @@ app.post('/api/admin/setters', authenticateToken, isAdmin, async (req, res) => {
     } catch (error) {
         if (error.code === '23505') return res.status(400).json({ error: 'Username already exists' });
         res.status(500).json({ error: error.message });
-    }
-});
-
-app.get('/api/admin/setters', authenticateToken, isAdmin, async (req, res) => {
-    try {
-        const result = await db.query(`SELECT id, username, real_name, is_active, created_at FROM users WHERE role = 'setter' AND is_active = 1`);
-        const setters = result.rows;
-        const now = getArgentinaNow();
-        const todayStart = now.startOf('day').toISO();
-        const weekStart = now.startOf('week').toISO();
-        const monthStart = now.startOf('month').toISO();
-        const enrichedSetters = [];
-        for (const s of setters) {
-            const statsRes = await db.query(`SELECT COUNT(CASE WHEN created_at >= $1 THEN 1 END) as today, COUNT(CASE WHEN created_at >= $2 THEN 1 END) as week, COUNT(CASE WHEN created_at >= $3 THEN 1 END) as month FROM messages WHERE setter_id = $4`, [todayStart, weekStart, monthStart, s.id]);
-            enrichedSetters.push({ ...s, ...statsRes.rows[0] });
-        }
-        res.json(enrichedSetters);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
     }
 });
 
@@ -152,7 +155,7 @@ app.get('/api/setter/metrics', authenticateToken, async (req, res) => {
     const monthStart = now.startOf('month').toISO();
     try {
         const stats = await db.query(`SELECT COUNT(CASE WHEN created_at >= $1 THEN 1 END) as today, COUNT(CASE WHEN created_at >= $2 THEN 1 END) as week, COUNT(CASE WHEN created_at >= $3 THEN 1 END) as month, COUNT(*) as total FROM messages WHERE setter_id = $4`, [todayStart, weekStart, monthStart, req.user.id]);
-        res.json(stats.rows[0]);
+        res.json(stats.rows[0] || { today: 0, week: 0, month: 0, total: 0 });
     } catch (err) {
         res.status(500).json({ error: 'Failed to fetch metrics' });
     }
@@ -235,7 +238,6 @@ app.get('/api/leaderboard', authenticateToken, async (req, res) => {
     const { period } = req.query;
     const now = getArgentinaNow();
     let start;
-
     if (period === 'today') start = now.startOf('day');
     else if (period === 'week') start = now.startOf('week');
     else if (period === 'month') start = now.startOf('month');
@@ -253,11 +255,7 @@ app.get('/api/leaderboard', authenticateToken, async (req, res) => {
 app.get('/api/admin/messages', authenticateToken, isAdmin, async (req, res) => {
     const { period } = req.query;
     const now = getArgentinaNow();
-    let start;
-    if (period === 'today') start = now.startOf('day');
-    else if (period === 'week') start = now.startOf('week');
-    else if (period === 'month') start = now.startOf('month');
-    else start = now.minus({ years: 10 });
+    let start = period === 'today' ? now.startOf('day') : (period === 'week' ? now.startOf('week') : (period === 'month' ? now.startOf('month') : now.minus({ years: 10 })));
 
     try {
         const result = await db.query(`SELECT m.*, u.real_name as setter_name FROM messages m JOIN users u ON m.setter_id = u.id WHERE m.created_at >= $1 ORDER BY m.created_at DESC`, [start.toISO()]);
@@ -270,15 +268,11 @@ app.get('/api/admin/messages', authenticateToken, isAdmin, async (req, res) => {
 app.get('/api/admin/metrics', authenticateToken, isAdmin, async (req, res) => {
     const { period } = req.query;
     const now = getArgentinaNow();
-    let start;
-    if (period === 'today') start = now.startOf('day');
-    else if (period === 'week') start = now.startOf('week');
-    else if (period === 'month') start = now.startOf('month');
-    else start = now.minus({ years: 10 });
+    let start = period === 'today' ? now.startOf('day') : (period === 'week' ? now.startOf('week') : (period === 'month' ? now.startOf('month') : now.minus({ years: 10 })));
 
     try {
         const result = await db.query(`SELECT COUNT(*) as total, COUNT(CASE WHEN message_type = 'sent' THEN 1 END) as sent, COUNT(CASE WHEN message_type = 'responded' THEN 1 END) as responded, COUNT(CASE WHEN message_type = 'call' THEN 1 END) as calls FROM messages WHERE created_at >= $1`, [start.toISO()]);
-        res.json(result.rows[0]);
+        res.json(result.rows[0] || { total: 0, sent: 0, responded: 0, calls: 0 });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -287,7 +281,7 @@ app.get('/api/admin/metrics', authenticateToken, isAdmin, async (req, res) => {
 app.get('/api/admin/breakdown/lifetime', authenticateToken, isAdmin, async (req, res) => {
     try {
         const result = await db.query(`SELECT COUNT(*) as total, COUNT(CASE WHEN message_type = 'sent' THEN 1 END) as sent, COUNT(CASE WHEN message_type = 'responded' THEN 1 END) as responded, COUNT(CASE WHEN message_type = 'call' THEN 1 END) as calls FROM messages`);
-        res.json(result.rows[0]);
+        res.json(result.rows[0] || { total: 0, sent: 0, responded: 0, calls: 0 });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -301,10 +295,7 @@ app.get('/api/admin/setters/:id/messages', authenticateToken, isAdmin, async (re
     let idx = 2;
 
     if (period) {
-        let start;
-        if (period === 'today') start = now.startOf('day');
-        else if (period === 'week') start = now.startOf('week');
-        else if (period === 'month') start = now.startOf('month');
+        let start = period === 'today' ? now.startOf('day') : (period === 'week' ? now.startOf('week') : (period === 'month' ? now.startOf('month') : null));
         if (start) {
             conditions.push(`created_at >= $${idx}`);
             params.push(start.toISO());
@@ -353,10 +344,7 @@ app.get('/api/admin/export', authenticateToken, isAdmin, async (req, res) => {
     let idx = 1;
 
     if (period) {
-        let start;
-        if (period === 'today') start = now.startOf('day');
-        else if (period === 'week') start = now.startOf('week');
-        else if (period === 'month') start = now.startOf('month');
+        let start = period === 'today' ? now.startOf('day') : (period === 'week' ? now.startOf('week') : (period === 'month' ? now.startOf('month') : null));
         if (start) {
             conditions.push(`m.created_at >= $${idx}`);
             params.push(start.toISO());
@@ -370,10 +358,8 @@ app.get('/api/admin/export', authenticateToken, isAdmin, async (req, res) => {
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-
     try {
         const result = await db.query(`SELECT m.*, u.real_name as setter_name FROM messages m JOIN users u ON m.setter_id = u.id ${where} ORDER BY m.created_at DESC`, params);
-
         const workbook = new ExcelJS.Workbook();
         const sheet = workbook.addWorksheet('Messages');
         sheet.columns = [
@@ -386,7 +372,6 @@ app.get('/api/admin/export', authenticateToken, isAdmin, async (req, res) => {
             { header: 'Date', key: 'created_at', width: 25 }
         ];
         result.rows.forEach(row => sheet.addRow(row));
-
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', 'attachment; filename=export.xlsx');
         await workbook.xlsx.write(res);
@@ -407,14 +392,11 @@ app.get('/api/admin/backups', authenticateToken, isAdmin, async (req, res) => {
 
 app.get('/api/admin/backups/download/:filename', authenticateToken, isAdmin, (req, res) => {
     const filePath = path.join(backupsDir, req.params.filename);
-    if (fs.existsSync(filePath)) {
-        res.download(filePath);
-    } else {
-        res.status(404).json({ error: 'File not found' });
-    }
+    if (fs.existsSync(filePath)) res.download(filePath);
+    else res.status(404).json({ error: 'File not found' });
 });
 
-// --- Backup automático diario ---
+// --- Backup automático ---
 cron.schedule('0 3 * * *', async () => {
     try {
         const result = await db.query(`SELECT m.*, u.real_name as setter_name FROM messages m JOIN users u ON m.setter_id = u.id ORDER BY m.created_at DESC`);
@@ -424,9 +406,6 @@ cron.schedule('0 3 * * *', async () => {
             { header: 'ID', key: 'id', width: 10 },
             { header: 'Setter', key: 'setter_name', width: 20 },
             { header: 'Type', key: 'message_type', width: 15 },
-            { header: 'Contact', key: 'contact_type', width: 15 },
-            { header: 'Value', key: 'contact_value', width: 25 },
-            { header: 'Prospect', key: 'prospect_user', width: 20 },
             { header: 'Date', key: 'created_at', width: 25 }
         ];
         result.rows.forEach(row => sheet.addRow(row));
@@ -438,19 +417,15 @@ cron.schedule('0 3 * * *', async () => {
     }
 });
 
-// --- RUTA FINAL PARA LA WEB ---
+// --- RUTA FINAL WEB ---
 app.get('*', (req, res) => {
     const indexPath = path.join(frontendPath, 'index.html');
-    if (fs.existsSync(indexPath)) {
-        res.sendFile(indexPath);
-    } else {
-        res.status(404).send(`Error: No se encontró el index.html en ${frontendPath}. Carpetas detectadas: ${fs.readdirSync(__dirname).join(', ')}`);
-    }
+    if (fs.existsSync(indexPath)) res.sendFile(indexPath);
+    else res.status(404).send(`Error: Front no encontrado en ${frontendPath}`);
 });
 
-// --- START SERVER ---
 app.listen(PORT, '0.0.0.0', async () => {
-    await seedAdmin(); // Crea el admin apenas arranca el backend
+    await seedAdmin();
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📂 Frontend Path: ${frontendPath}`);
 });
