@@ -50,6 +50,29 @@ const isAdmin = (req, res, next) => {
     next();
 };
 
+// --- FUNCIÓN DE AUTO-CREACIÓN DE ADMIN (Postgres) ---
+const seedAdmin = async () => {
+    const adminUsername = 'joel_admin';
+    const adminPassword = 'admin73152'; // CAMBIÁ ESTO por la clave que quieras
+
+    try {
+        // Borramos el usuario para asegurar que la clave se actualice si la cambiaste en el código
+        await db.query('DELETE FROM users WHERE username = $1', [adminUsername]);
+
+        const hash = bcrypt.hashSync(adminPassword, 10);
+        const now = getArgentinaNow().toISO();
+
+        await db.query(`
+            INSERT INTO users (username, password_hash, real_name, role, is_active, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [adminUsername, hash, 'Joel', 'admin', 1, now, now]);
+
+        console.log('✅ ADMIN RESETEADO: Usuario "joel_admin" creado con éxito en Postgres.');
+    } catch (error) {
+        console.error('❌ Error en el seed de Postgres:', error.message);
+    }
+};
+
 // --- Rutas de Auth ---
 app.post('/api/auth/login', async (req, res) => {
     try {
@@ -416,7 +439,6 @@ cron.schedule('0 3 * * *', async () => {
 });
 
 // --- RUTA FINAL PARA LA WEB ---
-// Si no es una ruta de API, sirve el index.html
 app.get('*', (req, res) => {
     const indexPath = path.join(frontendPath, 'index.html');
     if (fs.existsSync(indexPath)) {
@@ -426,7 +448,9 @@ app.get('*', (req, res) => {
     }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+// --- START SERVER ---
+app.listen(PORT, '0.0.0.0', async () => {
+    await seedAdmin(); // Crea el admin apenas arranca el backend
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📂 Frontend Path: ${frontendPath}`);
 });
