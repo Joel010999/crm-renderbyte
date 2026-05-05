@@ -56,20 +56,25 @@ const seedAdmin = async () => {
     const adminPassword = 'admin73152';
 
     try {
-        // Reseteo de seguridad para asegurar acceso
-        await db.query('DELETE FROM users WHERE username = $1', [adminUsername]);
+        // Primero verificamos si ya existe para no cambiar el ID al divino botón
+        const check = await db.query('SELECT * FROM users WHERE username = $1', [adminUsername]);
 
-        const hash = bcrypt.hashSync(adminPassword, 10);
-        const now = getArgentinaNow().toISO();
-
-        await db.query(`
-            INSERT INTO users (username, password_hash, real_name, role, is_active, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, 1, $5, $6)
-        `, [adminUsername, hash, 'Joel', 'admin', now, now]);
-
-        console.log('✅ ADMIN RESETEADO: Usuario "joel_admin" creado con éxito en Postgres.');
+        if (check.rows.length === 0) {
+            const hash = bcrypt.hashSync(adminPassword, 10);
+            const now = getArgentinaNow().toISO();
+            await db.query(`
+                INSERT INTO users (username, password_hash, real_name, role, is_active, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, 1, $5, $6)
+            `, [adminUsername, hash, 'Joel', 'admin', now, now]);
+            console.log('✅ ADMIN CREADO: joel_admin listo.');
+        } else {
+            // Si ya existe, solo le reseteamos la clave por las dudas
+            const hash = bcrypt.hashSync(adminPassword, 10);
+            await db.query('UPDATE users SET password_hash = $1 WHERE username = $2', [hash, adminUsername]);
+            console.log('✔ ADMIN ACTUALIZADO: joel_admin ya existía.');
+        }
     } catch (error) {
-        console.error('❌ Error en el seed de Postgres:', error.message);
+        console.error('❌ Error en el seed:', error.message);
     }
 };
 
@@ -100,18 +105,18 @@ app.get('/api/auth/me', authenticateToken, (req, res) => {
     res.json(req.user);
 });
 
-// --- Admin: Gestión de Setters ---
+// --- Admin: Gestión de Setters (REFORZADA PARA EVITAR PANTALLA NEGRA) ---
 app.get('/api/admin/setters', authenticateToken, isAdmin, async (req, res) => {
     try {
-        // Crucial: Traemos todos los activos para que el dashboard no crashee al buscar el admin
+        // Traemos a todos los activos (admin y setters) para que el .find() del front encuentre siempre algo
         const result = await db.query(`SELECT id, username, real_name, role, is_active, created_at FROM users WHERE is_active = 1`);
         const users = result.rows;
         const now = getArgentinaNow();
-        const tStart = now.startOf('day').toISO();
-        const wStart = now.startOf('week').toISO();
-        const mStart = now.startOf('month').toISO();
+        const tS = now.startOf('day').toISO();
+        const wS = now.startOf('week').toISO();
+        const mS = now.startOf('month').toISO();
 
-        const enrichedUsers = [];
+        const enriched = [];
         for (const u of users) {
             const stats = await db.query(`
                 SELECT 
@@ -119,13 +124,13 @@ app.get('/api/admin/setters', authenticateToken, isAdmin, async (req, res) => {
                     COUNT(CASE WHEN created_at >= $2 THEN 1 END) as week, 
                     COUNT(CASE WHEN created_at >= $3 THEN 1 END) as month 
                 FROM messages WHERE setter_id = $4
-            `, [tStart, wStart, mStart, u.id]);
-            enrichedUsers.push({ ...u, ...stats.rows[0] });
+            `, [tS, wS, mS, u.id]);
+            enriched.push({ ...u, ...stats.rows[0] });
         }
-        res.json(enrichedUsers);
+        res.json(enriched);
     } catch (err) {
         console.error("Error en setters:", err.message);
-        res.json([]); // Evita pantalla negra si falla la query
+        res.json([]); // Si falla, mandamos lista vacía para que el front no crashee
     }
 });
 
@@ -142,7 +147,7 @@ app.post('/api/admin/setters', authenticateToken, isAdmin, async (req, res) => {
     }
 });
 
-// --- Rutas de Setters y Mensajes ---
+// --- Rutas de Setters y Registro de Mensajes ---
 app.post('/api/setter/messages', authenticateToken, async (req, res) => {
     const { message_type, contact_type, contact_value, prospect_user } = req.body;
     const now = getArgentinaNow().toISO();
@@ -156,11 +161,11 @@ app.post('/api/setter/messages', authenticateToken, async (req, res) => {
 
 app.get('/api/setter/metrics', authenticateToken, async (req, res) => {
     const now = getArgentinaNow();
-    const tStart = now.startOf('day').toISO();
-    const wStart = now.startOf('week').toISO();
-    const mStart = now.startOf('month').toISO();
+    const tS = now.startOf('day').toISO();
+    const wS = now.startOf('week').toISO();
+    const mS = now.startOf('month').toISO();
     try {
-        const stats = await db.query(`SELECT COUNT(CASE WHEN created_at >= $1 THEN 1 END) as today, COUNT(CASE WHEN created_at >= $2 THEN 1 END) as week, COUNT(CASE WHEN created_at >= $3 THEN 1 END) as month, COUNT(*) as total FROM messages WHERE setter_id = $4`, [tStart, wStart, mStart, req.user.id]);
+        const stats = await db.query(`SELECT COUNT(CASE WHEN created_at >= $1 THEN 1 END) as today, COUNT(CASE WHEN created_at >= $2 THEN 1 END) as week, COUNT(CASE WHEN created_at >= $3 THEN 1 END) as month, COUNT(*) as total FROM messages WHERE setter_id = $4`, [tS, wS, mS, req.user.id]);
         res.json(stats.rows[0] || { today: 0, week: 0, month: 0, total: 0 });
     } catch (err) {
         res.status(500).json({ error: 'Failed to fetch metrics' });
@@ -193,50 +198,92 @@ app.get('/api/setter/messages', authenticateToken, async (req, res) => {
     }
 });
 
-// --- Admin: Métricas Globales y Exportación ---
+app.post('/api/setter/messages/:id/update', authenticateToken, async (req, res) => {
+    const { new_status, note } = req.body;
+    const now = getArgentinaNow().toISO();
+    try {
+        const msgRes = await db.query('SELECT * FROM messages WHERE id = $1', [req.params.id]);
+        const message = msgRes.rows[0];
+        if (!message) return res.status(404).json({ error: 'Message not found' });
+
+        await db.query('BEGIN');
+        await db.query('UPDATE messages SET message_type = $1, updated_at = $2 WHERE id = $3', [new_status, now, req.params.id]);
+        await db.query(`INSERT INTO message_history (message_id, user_id, old_status, new_status, note, created_at) VALUES ($1, $2, $3, $4, $5, $6)`, [req.params.id, req.user.id, message.message_type, new_status, note || '', now]);
+        await db.query('COMMIT');
+        res.json({ message: 'Status updated successfully' });
+    } catch (err) {
+        await db.query('ROLLBACK');
+        res.status(500).json({ error: 'Failed to update status' });
+    }
+});
+
+app.get('/api/setter/messages/:id/history', authenticateToken, async (req, res) => {
+    try {
+        const result = await db.query(`SELECT mh.*, u.real_name as changed_by FROM message_history mh JOIN users u ON mh.user_id = u.id WHERE mh.message_id = $1 ORDER BY mh.created_at DESC`, [req.params.id]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- Líderes y Status ---
+app.get('/api/leaderboard', authenticateToken, async (req, res) => {
+    const { period } = req.query;
+    const now = getArgentinaNow();
+    let start = period === 'today' ? now.startOf('day') : (period === 'week' ? now.startOf('week') : now.startOf('month'));
+    try {
+        const result = await db.query(`SELECT u.real_name, COUNT(m.id) as count FROM users u LEFT JOIN messages m ON u.id = m.setter_id AND m.created_at >= $1 WHERE u.role = 'setter' AND u.is_active = 1 GROUP BY u.id, u.real_name ORDER BY count DESC LIMIT 3`, [start.toISO()]);
+        res.json(result.rows);
+    } catch (err) {
+        res.json([]);
+    }
+});
+
+// --- Admin: Mensajes, Métricas y Exportación ---
+app.get('/api/admin/messages', authenticateToken, isAdmin, async (req, res) => {
+    const { period } = req.query;
+    const now = getArgentinaNow();
+    let start = period === 'today' ? now.startOf('day') : (period === 'week' ? now.startOf('week') : (period === 'month' ? now.startOf('month') : now.minus({ years: 10 })));
+    try {
+        const result = await db.query(`SELECT m.*, u.real_name as setter_name FROM messages m JOIN users u ON m.setter_id = u.id WHERE m.created_at >= $1 ORDER BY m.created_at DESC`, [start.toISO()]);
+        res.json(result.rows);
+    } catch (err) {
+        res.json([]);
+    }
+});
+
 app.get('/api/admin/metrics', authenticateToken, isAdmin, async (req, res) => {
     const { period } = req.query;
     const now = getArgentinaNow();
     let start = period === 'today' ? now.startOf('day') : (period === 'week' ? now.startOf('week') : (period === 'month' ? now.startOf('month') : now.minus({ years: 10 })));
-
     try {
         const result = await db.query(`SELECT COUNT(*) as total, COUNT(CASE WHEN message_type = 'sent' THEN 1 END) as sent, COUNT(CASE WHEN message_type = 'responded' THEN 1 END) as responded, COUNT(CASE WHEN message_type = 'call' THEN 1 END) as calls FROM messages WHERE created_at >= $1`, [start.toISO()]);
         res.json(result.rows[0] || { total: 0, sent: 0, responded: 0, calls: 0 });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.json({ total: 0, sent: 0, responded: 0, calls: 0 });
     }
 });
 
 app.get('/api/admin/export', authenticateToken, isAdmin, async (req, res) => {
     const { period, setter_id } = req.query;
     const now = getArgentinaNow();
-    let conditions = [];
-    let params = [];
-    let idx = 1;
-
+    let conditions = []; let params = []; let idx = 1;
     if (period) {
         let start = period === 'today' ? now.startOf('day') : (period === 'week' ? now.startOf('week') : now.startOf('month'));
-        conditions.push(`m.created_at >= $${idx}`);
-        params.push(start.toISO());
-        idx++;
+        conditions.push(`m.created_at >= $${idx}`); params.push(start.toISO()); idx++;
     }
     if (setter_id) {
-        conditions.push(`m.setter_id = $${idx}`);
-        params.push(setter_id);
+        conditions.push(`m.setter_id = $${idx}`); params.push(setter_id);
     }
-
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     try {
         const result = await db.query(`SELECT m.*, u.real_name as setter_name FROM messages m JOIN users u ON m.setter_id = u.id ${where} ORDER BY m.created_at DESC`, params);
         const workbook = new ExcelJS.Workbook();
         const sheet = workbook.addWorksheet('Messages');
         sheet.columns = [
-            { header: 'ID', key: 'id', width: 10 },
-            { header: 'Setter', key: 'setter_name', width: 20 },
-            { header: 'Type', key: 'message_type', width: 15 },
-            { header: 'Value', key: 'contact_value', width: 25 },
-            { header: 'Prospect', key: 'prospect_user', width: 20 },
-            { header: 'Date', key: 'created_at', width: 25 }
+            { header: 'ID', key: 'id', width: 10 }, { header: 'Setter', key: 'setter_name', width: 20 },
+            { header: 'Type', key: 'message_type', width: 15 }, { header: 'Value', key: 'contact_value', width: 25 },
+            { header: 'Prospect', key: 'prospect_user', width: 20 }, { header: 'Date', key: 'created_at', width: 25 }
         ];
         result.rows.forEach(row => sheet.addRow(row));
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -255,10 +302,8 @@ cron.schedule('0 3 * * *', async () => {
         const workbook = new ExcelJS.Workbook();
         const sheet = workbook.addWorksheet('Backup');
         sheet.columns = [
-            { header: 'ID', key: 'id', width: 10 },
-            { header: 'Setter', key: 'setter_name', width: 20 },
-            { header: 'Type', key: 'message_type', width: 15 },
-            { header: 'Date', key: 'created_at', width: 25 }
+            { header: 'ID', key: 'id', width: 10 }, { header: 'Setter', key: 'setter_name', width: 20 },
+            { header: 'Type', key: 'message_type', width: 15 }, { header: 'Date', key: 'created_at', width: 25 }
         ];
         result.rows.forEach(row => sheet.addRow(row));
         const filename = `backup_${DateTime.now().toFormat('yyyy-MM-dd_HHmmss')}.xlsx`;
@@ -269,27 +314,26 @@ cron.schedule('0 3 * * *', async () => {
     }
 });
 
-// --- Líderes y Status ---
-app.get('/api/leaderboard', authenticateToken, async (req, res) => {
-    const { period } = req.query;
-    const now = getArgentinaNow();
-    let start = period === 'today' ? now.startOf('day') : (period === 'week' ? now.startOf('week') : now.startOf('month'));
+app.get('/api/admin/backups', authenticateToken, isAdmin, async (req, res) => {
     try {
-        const result = await db.query(`SELECT u.real_name, COUNT(m.id) as count FROM users u LEFT JOIN messages m ON u.id = m.setter_id AND m.created_at >= $1 WHERE u.role = 'setter' AND u.is_active = 1 GROUP BY u.id, u.real_name ORDER BY count DESC LIMIT 3`, [start.toISO()]);
-        res.json(result.rows);
+        const files = fs.readdirSync(backupsDir).filter(f => f.endsWith('.xlsx'));
+        res.json(files);
     } catch (err) {
-        res.json([]);
+        res.status(500).json({ error: err.message });
     }
+});
+
+app.get('/api/admin/backups/download/:filename', authenticateToken, isAdmin, (req, res) => {
+    const filePath = path.join(backupsDir, req.params.filename);
+    if (fs.existsSync(filePath)) res.download(filePath);
+    else res.status(404).json({ error: 'File not found' });
 });
 
 // --- Fallback para Frontend ---
 app.get('*', (req, res) => {
     const indexPath = path.join(frontendPath, 'index.html');
-    if (fs.existsSync(indexPath)) {
-        res.sendFile(indexPath);
-    } else {
-        res.status(404).send("Error: Frontend dist no encontrado.");
-    }
+    if (fs.existsSync(indexPath)) res.sendFile(indexPath);
+    else res.status(404).send("Error: Frontend dist no encontrado.");
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
